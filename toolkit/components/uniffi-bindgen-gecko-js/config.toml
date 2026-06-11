@@ -9,6 +9,31 @@
 
 # TODO: Upgrade the TOML crate and switch to array of tables syntax.
 
+[ads_client.async_wrappers]
+MozAdsClient = "AsyncWrapped"
+"MozAdsClient.new" = "Sync"
+"MozAdsClient.clear_cache" = "Sync"
+"MozAdsClient.cycle_context_id" = "Sync"
+"MozAdsClient.record_click" = "AsyncWrapped"
+"MozAdsClient.record_impression" = "AsyncWrapped"
+"MozAdsClient.report_ad" = "AsyncWrapped"
+"MozAdsClient.request_image_ads" = "AsyncWrapped"
+"MozAdsClient.request_spoc_ads" = "AsyncWrapped"
+"MozAdsClient.request_tile_ads" = "AsyncWrapped"
+"MozAdsTelemetry.record_build_cache_error" = "FireAndForget"
+"MozAdsTelemetry.record_client_error" = "FireAndForget"
+"MozAdsTelemetry.record_client_operation_total" = "FireAndForget"
+"MozAdsTelemetry.record_deserialization_error" = "FireAndForget"
+"MozAdsTelemetry.record_http_cache_outcome" = "FireAndForget"
+"MozAdsContextIdProvider.context_id" = "Sync"
+MozAdsClientBuilder = "Sync"
+"MozAdsClientBuilder.new" = "Sync"
+"MozAdsClientBuilder.build" = "Sync"
+"MozAdsClientBuilder.cache_config" = "Sync"
+"MozAdsClientBuilder.context_id_provider" = "Sync"
+"MozAdsClientBuilder.environment" = "Sync"
+"MozAdsClientBuilder.telemetry" = "Sync"
+
 [context_id.async_wrappers]
 ContextIDComponent = "AsyncWrapped"
 "ContextIDComponent.new" = "Sync"
@@ -71,6 +96,10 @@ TabsStore = "AsyncWrapped"
 
 [viaduct.async_wrappers]
 "allow_android_emulator_loopback" = "Sync"
+"clear_ohttp_channels" = "Sync"
+"configure_default_ohttp_channels" = "Sync"
+"configure_ohttp_channel" = "Sync"
+"list_ohttp_channels" = "Sync"
 "init_backend" = "Sync"
 set_global_default_user_agent = "Sync"
 
