@@ -143,20 +143,28 @@ fn handle_callable(
                         "UniFFIScaffolding.callAsyncWrapper".to_string();
                 }
                 ConcurrencyMode::FireAndForget => {
-                    if !matches!(
-                        callable.kind,
-                        CallableKind::VTableMethod {
-                            for_callback_interface: true,
-                            ..
+                    // with_foreign trait interfaces expose each method both as a regular
+                    // Method (JS->Rust, used when JS holds a Rust-implemented instance) and
+                    // as a VTableMethod (Rust->JS via the vtable). FireAndForget only applies
+                    // to the vtable direction; the regular method is generated as Sync so it
+                    // still produces a valid scaffolding call.
+                    match callable.kind {
+                        CallableKind::VTableMethod { .. } => {
+                            // no need to set `is_js_async` or `uniffi_scaffolding_method`
+                            // since these can only be called from Rust.
                         }
-                    ) {
-                        bail!(
-                            "VTable method '{}' cannot be FireAndForget as Rust-implemented functions don't support fire-and-forget wrapping",
-                            spec
-                        );
+                        CallableKind::Method { .. } => {
+                            callable.is_js_async = false;
+                            callable.uniffi_scaffolding_method =
+                                "UniFFIScaffolding.callSync".to_string();
+                        }
+                        _ => {
+                            bail!(
+                                "VTable method '{}' cannot be FireAndForget as Rust-implemented functions don't support fire-and-forget wrapping",
+                                spec
+                            );
+                        }
                     }
-                    // no need to set `is_js_async` or `uniffi_scaffolding_method` since these can only
-                    // be called from Rust.
                 }
             }
         }

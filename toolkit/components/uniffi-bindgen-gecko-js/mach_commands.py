@@ -44,10 +44,51 @@ def build_gkrust_uniffi_library(command_context, source_library):
         source_library.value,
     ] + cargo_args_for_library(source_library)
     print(cmdline)
-    subprocess.check_call(cmdline, cwd=uniffi_root)
+    env = os.environ.copy()
+    # ads-client pulls in nss_sys, whose build script requires the static NSS
+    # libraries produced by the Firefox build system. Setting MOZ_TOPOBJDIR
+    # switches nss_sys to dynamic linking against libnss3, which is available
+    # in the objdir after a normal `mach build`.
+    if "MOZ_TOPOBJDIR" not in env:
+        import glob
+
+        objdirs = glob.glob(os.path.join(command_context.topsrcdir, "obj-*"))
+        if objdirs:
+            objdir = max(objdirs, key=os.path.getmtime)
+            env["MOZ_TOPOBJDIR"] = objdir
+            # mozbuild's build script finds BUILDCONFIG_RS by walking ancestors
+            # of OUT_DIR looking for config.status. Setting CARGO_TARGET_DIR to
+            # a path inside the objdir makes that walk succeed.
+            if "CARGO_TARGET_DIR" not in env:
+                env["CARGO_TARGET_DIR"] = os.path.join(objdir, "cargo")
+            env["DYLD_LIBRARY_PATH"] = (
+                os.path.join(objdir, "dist", "bin")
+                + os.pathsep
+                + env.get("DYLD_LIBRARY_PATH", "")
+            ).rstrip(os.pathsep)
+            # nss_sys's build script doesn't declare MOZ_TOPOBJDIR as a
+            # rerun-if-env-changed input, so cached build artifacts may have
+            # the wrong link commands. Force a clean rebuild of nss_sys.
+            subprocess.call(
+                [
+                    "cargo",
+                    "clean",
+                    "-p",
+                    "nss_sys",
+                    "-p",
+                    "nss_build_common",
+                    "--release",
+                ],
+                cwd=uniffi_root,
+            )
+    subprocess.check_call(cmdline, cwd=uniffi_root, env=env)
     print()
 
-    out_dir = os.path.join(command_context.topsrcdir, "target", "release")
+    cargo_target_dir = env.get(
+        "CARGO_TARGET_DIR",
+        os.path.join(command_context.topsrcdir, "target"),
+    )
+    out_dir = os.path.join(cargo_target_dir, "release")
     basename = format(source_library.value.replace("-", "_"))
     filename_candidates = [
         # Linux / Darwin
