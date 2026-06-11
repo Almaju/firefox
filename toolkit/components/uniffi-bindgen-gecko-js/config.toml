@@ -9,6 +9,12 @@
 
 # TODO: Upgrade the TOML crate and switch to array of tables syntax.
 
+[ads_client.async_wrappers]
+MozAdsClient = "AsyncWrapped"
+MozAdsClientBuilder = "Sync"
+MozAdsContextIdProvider = "Sync"
+MozAdsTelemetry = "Sync"
+
 [context_id.async_wrappers]
 ContextIDComponent = "AsyncWrapped"
 "ContextIDComponent.new" = "Sync"

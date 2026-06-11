@@ -35,6 +35,11 @@
     :exclude-members: OhttpChannelNotConfigured
 ```
 
+```{js:autoclass} RustViaduct.sys.OhttpConfig
+    :members:
+    :exclude-members: OhttpConfig
+```
+
 ```{js:autoclass} RustViaduct.sys.OhttpConfigFetchFailed
     :members:
     :exclude-members: OhttpConfigFetchFailed
@@ -78,7 +83,22 @@
 ```{js:autofunction} RustViaduct.sys.allowAndroidEmulatorLoopback
 ```
 
+```{js:autofunction} RustViaduct.sys.clearOhttpChannels
+```
+
+```{js:autofunction} RustViaduct.sys.configureDefaultOhttpChannels
+```
+
+```{js:autofunction} RustViaduct.sys.configureOhttpChannel
+```
+
 ```{js:autofunction} RustViaduct.sys.initBackend
+```
+
+```{js:autofunction} RustViaduct.sys.listOhttpChannels
+```
+
+```{js:autofunction} RustViaduct.sys.sendOhttpRequest
 ```
 
 ```{js:autofunction} RustViaduct.sys.setGlobalDefaultUserAgent
