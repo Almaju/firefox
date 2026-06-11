@@ -55,29 +55,40 @@ import {
   MozAdsEnvironment,
   MozAdsPlacementRequest,
   MozAdsPlacementRequestWithCount,
+  MozAdsRequestOptions,
   MozAdsCacheConfig,
   MozAdsTelemetry,
 } from "moz-src:///toolkit/components/uniffi-bindgen-gecko-js/components/generated/RustAdsClient.sys.mjs";
 
-class LoggerTelemetry extends MozAdsTelemetry {
+import {
+  OhttpConfig,
+  configureOhttpChannel,
+} from "moz-src:///toolkit/components/uniffi-bindgen-gecko-js/components/generated/RustViaduct.sys.mjs";
+
+// OHTTP channel id the ads-client uses internally for its MARS requests.
+const ADS_CLIENT_OHTTP_CHANNEL = "ads-client";
+
+// Bridges the ads-client MozAdsTelemetry callbacks to Glean, mirroring the
+// AdsClientTelemetry implementations used on Android and iOS.
+class AdsClientTelemetry extends MozAdsTelemetry {
   recordBuildCacheError(label, value) {
-    console.error("AdsClient - recordBuildCacheError", label, value);
+    Glean.adsClient.buildCacheError[label].set(value);
   }
   recordClientError(label, value) {
-    console.error("AdsClient - recordClientError", label, value);
+    Glean.adsClient.clientError[label].set(value);
   }
-  recordClientOperationTotal(label, value) {
-    console.error("AdsClient - recordClientOperationTotal", label, value);
+  recordClientOperationTotal(label) {
+    Glean.adsClient.clientOperationTotal[label].add();
   }
   recordDeserializationError(label, value) {
-    console.error("AdsClient - recordDeserializationError", label, value);
+    Glean.adsClient.deserializationError[label].set(value);
   }
   recordHttpCacheOutcome(label, value) {
-    console.error("AdsClient - recordHttpCacheOutcome", label, value);
+    Glean.adsClient.httpCacheOutcome[label].set(value);
   }
 }
 
-const telemetry = new LoggerTelemetry();
+const telemetry = new AdsClientTelemetry();
 
 const AdsClient = MozAdsClientBuilder.init()
   .cacheConfig(
@@ -408,7 +419,11 @@ export class AdsFeed {
     };
 
     if (USE_ADS_CLIENT) {
-      responseData = await this.fetchWithAdsClient(placements);
+      responseData = await this.fetchWithAdsClient(placements, {
+        ohttpEnabled: marsOhttpEnabled,
+        ohttpRelayURL,
+        ohttpConfigURL,
+      });
     } else {
       // Make Oblivious Fetch Request
       if (marsOhttpEnabled && ohttpConfigURL && ohttpRelayURL) {
@@ -469,9 +484,33 @@ export class AdsFeed {
     return returnData;
   }
 
-  async fetchWithAdsClient(placements) {
+  async fetchWithAdsClient(
+    placements,
+    { ohttpEnabled, ohttpRelayURL, ohttpConfigURL } = {}
+  ) {
     console.error("AdsClient - fetchWithAdsClient calling with", placements);
     const formattedResponse = {};
+
+    // The ads-client routes its MARS requests over the "ads-client" viaduct
+    // OHTTP channel when requests opt in. Configure the relay/gateway for that
+    // channel before issuing requests, reusing the existing OHTTP prefs.
+    let useOhttp = false;
+    if (ohttpEnabled && ohttpRelayURL && ohttpConfigURL) {
+      try {
+        configureOhttpChannel(
+          ADS_CLIENT_OHTTP_CHANNEL,
+          new OhttpConfig({
+            relayUrl: ohttpRelayURL,
+            gatewayHost: new URL(ohttpConfigURL).host,
+          })
+        );
+        useOhttp = true;
+      } catch (error) {
+        console.error("AdsClient - failed to configure OHTTP channel:", error);
+      }
+    }
+    const requestOptions = new MozAdsRequestOptions({ ohttp: useOhttp });
+
     try {
       const tilesRequests = placements
         .filter(p => (p.placementId || p.placement)?.startsWith("newtab_tile_"))
@@ -484,7 +523,10 @@ export class AdsFeed {
         );
       if (tilesRequests.length) {
         console.error("AdsClient - requestTileAds calling with", tilesRequests);
-        const tiles = await AdsClient.requestTileAds(tilesRequests, null);
+        const tiles = await AdsClient.requestTileAds(
+          tilesRequests,
+          requestOptions
+        );
         console.error("AdsClient - requestTileAds SUCCESS - tiles:", tiles);
 
         for (const [placementId, tile] of tiles) {
@@ -510,7 +552,10 @@ export class AdsFeed {
           "AdsClient - requestSpocAds calling with",
           storiesRequests
         );
-        const spocs = await AdsClient.requestSpocAds(storiesRequests, null);
+        const spocs = await AdsClient.requestSpocAds(
+          storiesRequests,
+          requestOptions
+        );
         console.error("AdsClient - requestSpocAds SUCCESS - spocs:", spocs);
 
         for (const [placementId, spoc] of spocs) {
