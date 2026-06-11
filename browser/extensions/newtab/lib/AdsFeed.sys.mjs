@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+const VERSION = "7";
 
 const lazy = {
   Utils: "resource://services-settings/Utils.sys.mjs",
@@ -46,7 +47,58 @@ const PREF_SHOW_SPONSORED = "showSponsored";
 const PREF_SYSTEM_SHOW_SPONSORED = "system.showSponsored";
 
 const CACHE_KEY = "ads_feed";
-const ADS_UPDATE_TIME = 30 * 60 * 1000; // 30 minutes
+const ADS_UPDATE_TIME = 1; // 30 minutes
+const USE_ADS_CLIENT = true;
+
+import {
+  MozAdsClientBuilder,
+  MozAdsEnvironment,
+  MozAdsPlacementRequest,
+  MozAdsPlacementRequestWithCount,
+  MozAdsRequestOptions,
+  MozAdsCacheConfig,
+  MozAdsTelemetry,
+} from "moz-src:///toolkit/components/uniffi-bindgen-gecko-js/components/generated/RustAdsClient.sys.mjs";
+
+import {
+  OhttpConfig,
+  configureOhttpChannel,
+} from "moz-src:///toolkit/components/uniffi-bindgen-gecko-js/components/generated/RustViaduct.sys.mjs";
+
+// OHTTP channel id the ads-client uses internally for its MARS requests.
+const ADS_CLIENT_OHTTP_CHANNEL = "ads-client";
+
+// Bridges the ads-client MozAdsTelemetry callbacks to Glean, mirroring the
+// AdsClientTelemetry implementations used on Android and iOS.
+class AdsClientTelemetry extends MozAdsTelemetry {
+  recordBuildCacheError(label, value) {
+    Glean.adsClient.buildCacheError[label].set(value);
+  }
+  recordClientError(label, value) {
+    Glean.adsClient.clientError[label].set(value);
+  }
+  recordClientOperationTotal(label) {
+    Glean.adsClient.clientOperationTotal[label].add();
+  }
+  recordDeserializationError(label, value) {
+    Glean.adsClient.deserializationError[label].set(value);
+  }
+  recordHttpCacheOutcome(label, value) {
+    Glean.adsClient.httpCacheOutcome[label].set(value);
+  }
+}
+
+const telemetry = new AdsClientTelemetry();
+
+const AdsClient = MozAdsClientBuilder.init()
+  .cacheConfig(
+    new MozAdsCacheConfig({
+      dbPath: "ads_cache.db",
+    })
+  )
+  .environment(MozAdsEnvironment.PROD)
+  .telemetry(telemetry)
+  .build();
 
 export class AdsFeed {
   constructor() {
@@ -366,35 +418,44 @@ export class AdsFeed {
       signal,
     };
 
-    // Make Oblivious Fetch Request
-    if (marsOhttpEnabled && ohttpConfigURL && ohttpRelayURL) {
-      const config = await lazy.ObliviousHTTP.getOHTTPConfig(ohttpConfigURL);
-      if (!config) {
-        console.error(
-          new Error(
-            `OHTTP was configured for ${fetchUrl} but we couldn't fetch a valid config`
-          )
-        );
-        return null;
-      }
-      fetchPromise = lazy.ObliviousHTTP.ohttpRequest(
+    if (USE_ADS_CLIENT) {
+      responseData = await this.fetchWithAdsClient(placements, {
+        ohttpEnabled: marsOhttpEnabled,
         ohttpRelayURL,
-        config,
-        fetchUrl,
-        options
-      );
+        ohttpConfigURL,
+      });
     } else {
-      fetchPromise = this.fetch(fetchUrl, options);
-    }
+      // Make Oblivious Fetch Request
+      if (marsOhttpEnabled && ohttpConfigURL && ohttpRelayURL) {
+        const config = await lazy.ObliviousHTTP.getOHTTPConfig(ohttpConfigURL);
+        if (!config) {
+          console.error(
+            new Error(
+              `OHTTP was configured for ${fetchUrl} but we couldn't fetch a valid config`
+            )
+          );
+          return null;
+        }
+        fetchPromise = lazy.ObliviousHTTP.ohttpRequest(
+          ohttpRelayURL,
+          config,
+          fetchUrl,
+          options
+        );
+      } else {
+        fetchPromise = this.fetch(fetchUrl, options);
+      }
 
-    const response = await fetchPromise;
+      const response = await fetchPromise;
 
-    if (response && response.status === 200) {
-      responseData = await response.json();
-    } else {
-      throw new Error(
-        `Error fetching data: ${response.status} - ${response.statusText}`
-      );
+      if (response && response.status === 200) {
+        responseData = await response.json();
+        console.error("AdsClient - responseData", responseData);
+      } else {
+        throw new Error(
+          `Error fetching data: ${response.status} - ${response.statusText}`
+        );
+      }
     }
 
     if (supportedAdTypes.tiles) {
@@ -423,6 +484,91 @@ export class AdsFeed {
     return returnData;
   }
 
+  async fetchWithAdsClient(
+    placements,
+    { ohttpEnabled, ohttpRelayURL, ohttpConfigURL } = {}
+  ) {
+    console.error("AdsClient - fetchWithAdsClient calling with", placements);
+    const formattedResponse = {};
+
+    // The ads-client routes its MARS requests over the "ads-client" viaduct
+    // OHTTP channel when requests opt in. Configure the relay/gateway for that
+    // channel before issuing requests, reusing the existing OHTTP prefs.
+    let useOhttp = false;
+    if (ohttpEnabled && ohttpRelayURL && ohttpConfigURL) {
+      try {
+        configureOhttpChannel(
+          ADS_CLIENT_OHTTP_CHANNEL,
+          new OhttpConfig({
+            relayUrl: ohttpRelayURL,
+            gatewayHost: new URL(ohttpConfigURL).host,
+          })
+        );
+        useOhttp = true;
+      } catch (error) {
+        console.error("AdsClient - failed to configure OHTTP channel:", error);
+      }
+    }
+    const requestOptions = new MozAdsRequestOptions({ ohttp: useOhttp });
+
+    try {
+      const tilesRequests = placements
+        .filter(p => (p.placementId || p.placement)?.startsWith("newtab_tile_"))
+        .map(
+          p =>
+            new MozAdsPlacementRequest({
+              placementId: p.placementId || p.placement,
+              iabContent: p.iabContent ?? null,
+            })
+        );
+      if (tilesRequests.length) {
+        console.error("AdsClient - requestTileAds calling with", tilesRequests);
+        const tiles = await AdsClient.requestTileAds(
+          tilesRequests,
+          requestOptions
+        );
+        console.error("AdsClient - requestTileAds SUCCESS - tiles:", tiles);
+
+        for (const [placementId, tile] of tiles) {
+          tile.name = `${VERSION}: ${tile.name}`;
+          formattedResponse[placementId] = [tile];
+        }
+      }
+
+      const storiesRequests = placements
+        .filter(p =>
+          (p.placementId || p.placement)?.startsWith("newtab_stories_")
+        )
+        .map(
+          p =>
+            new MozAdsPlacementRequestWithCount({
+              placementId: p.placementId || p.placement,
+              iabContent: p.iabContent ?? null,
+              count: p.count,
+            })
+        );
+      if (storiesRequests.length) {
+        console.error(
+          "AdsClient - requestSpocAds calling with",
+          storiesRequests
+        );
+        const spocs = await AdsClient.requestSpocAds(
+          storiesRequests,
+          requestOptions
+        );
+        console.error("AdsClient - requestSpocAds SUCCESS - spocs:", spocs);
+
+        for (const [placementId, spoc] of spocs) {
+          spoc[0].name = `${VERSION}: ${spoc[0].name}`;
+          formattedResponse[placementId] = spoc;
+        }
+      }
+    } catch (error) {
+      console.error("AdsClient - requestTileAds ERROR:", error);
+    }
+    console.error("AdsClient - formattedResponse:", formattedResponse);
+    return formattedResponse;
+  }
   /**
    * Init function that runs only from onAction at.INIT call.
    *
