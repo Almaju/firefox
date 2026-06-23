@@ -13,7 +13,7 @@
 MozAdsClient = "AsyncWrapped"
 MozAdsClientBuilder = "Sync"
 MozAdsContextIdProvider = "Sync"
-MozAdsTelemetry = "Sync"
+MozAdsTelemetry = "FireAndForget"
 
 [context_id.async_wrappers]
 ContextIDComponent = "AsyncWrapped"
